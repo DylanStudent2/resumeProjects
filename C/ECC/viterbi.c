@@ -20,6 +20,9 @@ void input_to_values (unsigned char  decode_pairs[], int size, unsigned char rec
 */
 void viterbi(unsigned char recieved[], unsigned recieveSize);
 
+//XOR a select amount of bits in the data to simulate noise using the rand() function.
+void applyNoise(unsigned char recieved[], unsigned recieveSize);
+
 
 /*
    There'll be six tables for making our viterbi algorithm:
@@ -35,7 +38,7 @@ void viterbi(unsigned char recieved[], unsigned recieveSize);
       states can only have two different next states, not all the slots in this array will be used. 
 */
 
-//The three above must be initialiazed. They act as a sort of reference guide. This will be done through prototype:
+//The three arrays above must be initialiazed. They act as a sort of reference guide. This will be done through prototype:
 
 void initialize(unsigned char  next[][2], unsigned char  output[][2], unsigned char input[][4]);
 
@@ -60,39 +63,69 @@ void initialize(unsigned char  next[][2], unsigned char  output[][2], unsigned c
 
 */
 
-//As it says in the name. Error total needs a third column in it to keep track of the previous state. The first and second columns
+//As it says in the name. Array "error_total" needs a third column in it to keep track of the previous state. The first and second columns
 //represent the two different possible aggregate errors in a given state.
-void getHistory(unsigned char decode_pairs[], int size, unsigned char next_state[][2], unsigned char output [][2], unsigned char error_total[][3], unsigned char state_his[][18]);
-
-
-//Set up next pairs to be put into getHistory. If we had data of over 8 bytes, the real flush bits won't be accessed yet. 
-//void nextDecode(unsigned char decode_pairs[], );
+void getHistory(unsigned char decode_pairs[], unsigned char next_state[][2], unsigned char output [][2], unsigned char error_total[][3], unsigned char state_his[][18]);
 
 //Follow a value starting at the final column in state_his, storing the values into state_seq
 //along the way.
 void traceBack(unsigned char state_his[][18], unsigned char state_seq[]);
 
-//Take what we got from state_seq and turn them into actual data. 2 bytes of data will be stored in info at a time,
-//So the static variable index increases by two every time this function gets called.
+//Take what we got from state_seq and turn it into actual data. 2 bytes of data will be stored in info at a time,
 void interpret(unsigned char state_seq[], unsigned char input[][4], unsigned char info[]);
 
-//Prepares the next pairs to be processed. Pairs stored in decode pairs from indexes 0-15 get replaced by the 16 values after it.
-//A pointer keeps track of the content that isn't processed yet while another pointer always points to the beginning.
-void nextDecode(unsigned char decode_pairs[], int size);
+//Prepares the next pairs to be processed. Pairs stored in decode_pairs from indexes 0-1 get replaced
+//by the two final pairs that acted as "flush" bits, while indexes 2-17 get replaced by the next 16 values after it.
+//A pointer keeps track of the content that isn't processed yet. 
+void nextDecode(unsigned char decode_pairs[]);
 
 int main (int argc,char * argv[]){
-   unsigned char recieved[5];
+   unsigned length = 0;
 
-   //recieved [0] = 0x35;
-   //recieved [1] = 0xc3;
-   //recieved [2] = 0xb0;
+   int i = 0;
+   length = (strlen(argv[1]) * 2) + 1;
+
+   unsigned char recieved[length];
+
+   for(i = 0; i < length; i++){
+      recieved[i] = 0;
+   }
+
+   
+   //The program is written in a way to work with two characters at a time.
+   if(!(length%2)){
+      fprintf(stderr, "Please enter an even number of characters!\n");
+      exit(1);
+   }
+
+/*********************************************************************************************************************
+   Test case from the website. The original data was shorter than 2 bytes,
+   so the first pair of flush bits is part of recieved [3]. This meant
+   the size of the array decode_pairs in viterbi was decreased by 3 instead of by 2. 
+
    recieved [0] = 0x3c;
    recieved [1] = 0x67;
    recieved [2] = 0xe0;
    recieved [3] = 0xce;
    recieved [4] = 0xc0;
+*/
 
-   viterbi(recieved, sizeof(recieved));
+
+   convolution(argv[1], recieved, length);
+
+   applyNoise(recieved, length);
+
+
+   printf("Sent:\n");
+   for(i = 0; i < strlen(argv[1]); i++){
+      printf("%2x ", argv[1][i]);
+   }
+
+   printf("\n\n");
+
+
+
+   viterbi(recieved, length);
    
 
    return 0;
@@ -102,81 +135,178 @@ int main (int argc,char * argv[]){
 void viterbi(unsigned char recieved[], unsigned recieveSize){
 
    //resulting info from the decoding.
-   unsigned char info[(sizeof(recieved)-1)/2];   
+   unsigned char info[(recieveSize -1)/2];   
    
-   printf("size of info: %d\n", sizeof(info));
-   printf("size of recieved : %d\n",recieveSize);
-   unsigned char next_state[4][2];/////////////////[2^K-1][2^k] where k is number of real bits to paired bits. k will alwas be 1. 
+   unsigned char next_state[4][2];
    unsigned char output[4][2];
    unsigned char input [4][4];
    unsigned char state_his[4][18];
    unsigned char error_total [4][3];
    unsigned char state_seq[18];
-   int size = (recieveSize * 4) - 3;//was 2  //highest four bits of the last value in recieved[] is the final flush pair.
-                                                  //the rest of the bits are not important.
+   int size = 0;
+
+   //Each byte retrieved is split, every two bits will be stored in a byte in decode_pairs.
+   size = (recieveSize * 4) - 2;    //highest four bits of the last value in recieved[] is the final flush pair.
+                                        //the rest of those bits are not important, so the array is cut by 2 bytes.
    unsigned char decode_pairs[size];
+
+   //counters.
    int i = 0;
    int k = 0;
-   printf("size of decode pairs: %d\n", sizeof(decode_pairs));
-   input_to_values(decode_pairs, size, recieved);
-   initialize(next_state, output, input);
-   //for(i = 0; i < sizeof(decode_pairs); i++){
-   //   printf("pos %d is %d \n", i, decode_pairs[i]);
-   //}
-   //Bing bong
+   int f = 0;
 
-   for(i = 0; i < sizeof(info); i++){ 
-      getHistory(decode_pairs, size, next_state, output, error_total, state_his);
+   for(i = 0; i < 4; i++){
+      for(k = 0; k < 2; k++){
+         next_state[i][k] = 0;
+      }
+   }
+
+   input_to_values(decode_pairs, size, recieved);
+
+   initialize(next_state, output, input);
+
+
+   //Go through the steps of turning our recieved message into
+   //the actual data. 
+   for(i = 0; i < sizeof(info); i += 2){ 
+      getHistory(decode_pairs, next_state, output, error_total, state_his);
       traceBack(state_his, state_seq);
       interpret(state_seq, input, info);
-      nextDecode(decode_pairs, size);
-   }
-   for(i = 0; i < 4; i++){
-     printf("row %d: ", i);
-      for(k = 0; k < size; k++){
-        printf("  %d :", state_his[i][k]);
+      nextDecode(decode_pairs);
+
+      /************--Displays state history table--************************************************
+      for(f = 0; f < 4; f++){
+         printf("row %d: ", f);
+
+         for(k = 0; k < 18; k++){
+            printf("  %d :", state_his[f][k]);
+         }
+
+         printf("\n");
       }
-     printf("\n");
+      */
+
+   }//end for loop
+
+
+   printf("Retrieved:\n");
+
+   for(i = 0; i < sizeof(info); i++){
+      printf("%2x ", info[i]);   
+
    }
 
-}
-////
-void nextDecode(unsigned char decode_pairs[], int size){
+   printf("\n");
+
+
+}//end viterbi
+
+void nextDecode(unsigned char decode_pairs[]){
    int i = 0;
-   static unsigned char * current = 0;
-   unsigned char * beginning = 0;
-
+   static unsigned char offset = 16;
+   unsigned char * current = &decode_pairs[offset];
    
-   beginning = &decode_pairs[0];
-   
-   for(i = 0; i < size; i++){
-      
 
+   for(i = 0; i < 18; i++){
+      decode_pairs[i] = *current;
+      current++;
+      offset++;
+   }
+
+   //Set the offset back by two steps, I need to point the the next pair that were used
+   //as "flush bits", but still need to be interpreted as data.
+   offset -= 2;
+
+
+}//nextDecode
+
+
+//Light noise simulation. 
+void applyNoise(unsigned char recieved[], unsigned recieveSize){
+   int i = 0;
+   int k = 0;
+   unsigned value = 0;
+   unsigned char shift = 0; //for changing a particular byte
+
+   unsigned odds = 40;
+
+   unsigned char mask = 0x80;
+
+   time_t t;
+   
+   //Initialize random number generator.
+   srand((unsigned) time(&t));
+   
+   
+
+   for(i = 0; i < recieveSize; i++){
+
+      for(k = 0; k < 8; k ++){
+
+         if(k != 0){
+            mask = mask >> 1;
+         }
+
+         value = rand() % odds;
+
+         if(value < 1){ //one attempt of a 2.5% chance with seven 3% chances of a byte being modified.
+                        
+
+            recieved[i] = recieved[i] ^ mask;
+
+            odds = 40;
+
+            //jump to next byte
+            break;
+         }
+         else{
+            odds = 30;
+         }
+
+
+      }//end for
+
+      mask = 0x80; //reset mask for next byte
+
+   }//end for
+
+   printf("The change applied:\n");
+
+   for(i = 0; i < recieveSize; i++){
+      printf("%2d ",i);
 
    }
 
-}
+   printf("\n");
+
+   for(i = 0; i < recieveSize; i++){
+      printf("%2x ", recieved[i]);
+
+   }
+
+   printf("\n");
+
+}//applyNoise ends
 
 
 //Remember: there will be 4 values stored into decode_pairs for every 1 value from recieved.
-void input_to_values (unsigned char decode_pairs[], int size,  unsigned char recieved[]){
+void input_to_values (unsigned char * decode_pairs, int size,  unsigned char recieved[]){
    //index for decode_pairs array.  
    int i = 0;
    //index for recieved array.
    int f = 0;
 
+   //Take the two highest bits
    unsigned char mask = 0xc0;
-   printf("decode_pairs is apparently %d", size);
-   printf("\n");
 
    //The i is initialized to 1 instead of 0 to get the inner if statement to activate once every 4 loops. 
-   //It would've activated on 5th loop otherwise. Since I still wish to iterate sizeof(decode) times, I add an additional 1 to the limit.
+   //It would've activated on 5th loop otherwise. Since I still wish to iterate "sizeof(decode)"- times, I add an additional 1 to the limit.
    //Every assignment of decode will have its index substracted by 1 to keep things balanced. 
    for ( i = 1; i < size + 1; i++){
 
       //take the highest two bits into decode...
       decode_pairs[i-1] = (mask & recieved[f]);
-      //then turn the high bits into low bits.
+      //Then shift them into a small value.
       decode_pairs[i-1] = decode_pairs[i-1] >> 6;
             
       //If there's bits left in recieved[f]
@@ -185,28 +315,18 @@ void input_to_values (unsigned char decode_pairs[], int size,  unsigned char rec
          recieved[f] = recieved[f] << 2;
       }
       else{ 
-         //otherwise go to next stored byte in recieved[]
+         //otherwise go to the next stored byte in recieved[]
          f++;
       }
 
-   }
-   printf("\n");
+   }//end for loop
 
-   for(i = 0; i < size; i++){
-
-      printf(" %d ", decode_pairs[i]);
-
-   }
-   printf("\n");
-   
-}
+}//end input_to_values
 
 
 /*
-  It's easy to make a diagram of these three sets of reference, though in here it's harder to read. 
-  See home.netcom.com/~chip.f/viterbi/aglrthms2.html to see charts
-  in a more readable format. 
-
+  It's easy to make a diagram of these three sets of reference. 
+  See the link -- home.netcom.com/~chip.f/viterbi/aglrthms2.html -- to see charts
 */
 void initialize(unsigned char  next[][2], unsigned char  output[][2], unsigned char input[][4]){
    
@@ -221,7 +341,7 @@ void initialize(unsigned char  next[][2], unsigned char  output[][2], unsigned c
 
          next[i][0]++;
          next[i][1]++;
-         input[i][0] = 0xf;//0x0 means unavailable. empty. etc, since 0 actually serves a purpose. 
+         input[i][0] = 0xf;
          input[i][1] = 0;
          input[i][2] = 0xf;
          input[i][3] = 1;
@@ -232,21 +352,22 @@ void initialize(unsigned char  next[][2], unsigned char  output[][2], unsigned c
          input[i][2] = 1;
          input[i][3] = 0xf;
 
-
       }
 
-   }
-            //I'm not going to spend time figuring out a loop to initialize this one conveniently. 
-            output[0][0] = 0;
-            output[0][1] = 3;
-            output[1][0] = 3;
-            output[1][1] = 0;
-            output[2][0] = 2;
-            output[2][1] = 1;
-            output[3][0] = 1;
-            output[3][1] = 2;
+   }//end for
 
-}
+         //If there were more flip-flops and redundant bits being used, I'd 
+         //do something more convenient than hammering it out. 
+         output[0][0] = 0;
+         output[0][1] = 3;
+         output[1][0] = 3;
+         output[1][1] = 0;
+         output[2][0] = 2;
+         output[2][1] = 1;
+         output[3][0] = 1;
+         output[3][1] = 2;
+
+}//end initialize
 
 
 void traceBack(unsigned char state_his[][18], unsigned char state_seq[]){
@@ -265,17 +386,17 @@ void traceBack(unsigned char state_his[][18], unsigned char state_seq[]){
          previous = state_his[previous][i];
       }
 
-      printf("The state sequence is!\n");
-      //The state sequence!!!
+
+//Shows the state sequence to be interpretted 
+/*      printf("The state sequence is:\n");
       for (i = 0; i < 17; i++){
          printf("%d ", state_seq[i]);
       }
 
       printf("\n");
-  
+*/  
 
-}
-
+}//end traceback
 
 void interpret(unsigned char state_seq[], unsigned char input[][4], unsigned char info[]){
    static unsigned char index = 0;
@@ -314,7 +435,6 @@ void interpret(unsigned char state_seq[], unsigned char input[][4], unsigned cha
 
    }
 
-
    //I wouldn't want to Xor a variable with itself, so the i's start 1 digit above the byte that
    //stores the value.
    for(i = 1; i < 8; i++){
@@ -327,171 +447,138 @@ void interpret(unsigned char state_seq[], unsigned char input[][4], unsigned cha
    info[index++] = state_seq[0];
    info[index++] = state_seq[8];
       
-   printf("This is info %x at %x\n", index - 2, info[index - 2]);
-   printf("This is info %x at %x\n", index - 1, info[index - 1]);
+//   printf("This is info %x at %x\n", index - 2, info[index - 2]);
+//   printf("This is info %x at %x\n", index - 1, info[index - 1]);
 
-}
+}//end interpret
 
-void getHistory(unsigned char decode_pairs[], int size,  unsigned char next_state[][2], unsigned char output [][2], unsigned char error_total[][3], unsigned char state_his[][18]){
 
-  //Error total[]
+void getHistory(unsigned char decode_pairs[],  unsigned char next_state[][2], unsigned char output [][2], unsigned char error_total[][3], unsigned char state_his[][18]){
+
   //Variables for checking addition of error in each iteration:
-    int er[4];
+    int er[4]; //For debugging purposes. 
     int k = 0; //index for tables with 4 rows.
-    int i = 0; //incremental index for 
-    printf("Inside getHistory\n");
+    int i = 0; //incremental index for loops
     int f = 0;
-    //initialiaze/reset error_total and state_his.
-  
+
+    const unsigned size = 18;
+
+    //initialize/reset error_total and state_his.
     for(i = 0; i < 4; i++){
-      for (k = 0; k < 3; k++){
-         error_total[i][k] = 0;
-      }   
+       for (k = 0; k < 3; k++){
+          error_total[i][k] = 0;
+       }  
+       er[i] = 0;
     }
     for(i = 0; i < 4; i++){
-      for (k = 0; k < 19; k++){
-         state_his[i][k] = 0;
-      }   
+       for (k = 0; k < 18; k++){
+          state_his[i][k] = 0;
+       }   
     }
     /*
       There's certain cases occuring depending on iterator i's value.
-      The first two iterations involves making the next states available
-      in branching out. See the trellis on the website I linked to get 
-      an idea on what this is imitating. The final two iterations will
+      The first two iterations involve making the next states available
+      in branching out. See the trellis on the website -http://home.netcom.com/~chip.f/viterbi/algrthms2.html -  
+      to get an idea on what this is imitating. The final two iterations will
       only use  0 as input, which makes the diagram go back to state 0.
 
-    *///was size
+    */
+
     for(i = 0; i < size; i++){
-    printf("decode_pairs %x\n", decode_pairs[i]);
 
-      if( i == 0){
-         //formula for recieving the bit difference (error metric) is 
-         //(x ^ y) - (x^y)/2. This lets 00 ^ 01 be unaffected by the subtraction
-         //while any XOR of bit a and b (like ab ^ ba) will result in 2. 
+       if( i == 0){
+          //formula for recieving the bit difference (error metric) is 
+          //(x ^ y) - ((x^y)/2). This lets 00 ^ 01 be unaffected by the subtraction
+          //while any XOR of bit a and b (like ab ^ ba) will result in 2. 
         
-         error_total[0][0] = ( er[0] = ((output[0][0] ^ decode_pairs[i]) - (output[0][0] ^ decode_pairs[i]) / 2));//was plus
-         //printf("er0+ %d\n", er[0]);
-        // error_total[0][1]  =   error_total[0][0];      
-         error_total[0][2]  =   error_total[0][0];
+          error_total[0][0] = ( er[0] = ((output[0][0] ^ decode_pairs[i]) - (output[0][0] ^ decode_pairs[i]) / 2));
+          error_total[0][2]  =   error_total[0][0]; 
 
-         error_total[next_state[0][1]][0] =  (er[2] = ((output[0][1] ^ decode_pairs[i])   - (output[0][1] ^ decode_pairs[i]) / 2));// was plus
-         //printf("er2+ %d\n", er[2]);
-         error_total[next_state[0][1]][2] = error_total[next_state[0][1]][0];
-        
-    //     error_total[1][2] = error_total[2][0];
-    //     error_total[3][2] = error_total[2][0];
-
-        // error_total[3][1] = error_total[2][0];
-        // error_total[1][1] = error_total[2][0];
+          error_total[next_state[0][1]][0] =  (er[2] = ((output[0][1] ^ decode_pairs[i])   - (output[0][1] ^ decode_pairs[i]) / 2));
+          error_total[next_state[0][1]][2] = error_total[next_state[0][1]][0];
         
 
-         //error totals in next iteration must have the first error values stored into them
-         
+      //error totals in next iteration must have the first error values stored into them
       }
       else if ( i == 1){
 
-       for(k = 0; k < 4; k += 2){
+         for(k = 0; k < 4; k += 2){
 
-         error_total[next_state[k][0]][0]  = error_total[k][2] +  (er[f++] = ((output[k][0] ^ decode_pairs[i]) - (output[k][0] ^ decode_pairs[i]) / 2)); 
-         //was              
+            error_total[next_state[k][0]][0]  = error_total[k][2] +  (er[f++] = ((output[k][0] ^ decode_pairs[i]) - (output[k][0] ^ decode_pairs[i]) / 2)); 
          
-         error_total[next_state[k][1]][0]  = error_total[k][2] +  (er[++f] = ((output[k][1] ^ decode_pairs[i])   - (output[k][1] ^ decode_pairs[i]) / 2)); 
-         f = 1;
-         state_his[next_state[k][0]][i] = k;
-         state_his[next_state[k][1]][i] = k;
-       } 
-        
-         printf("er0+ %d\n", er[0]);
-         printf("er1+ %d\n", er[1]);
-         printf("er2+ %d\n", er[2]);
-         printf("er3+ %d\n", er[3]);
-          
-         //
+            error_total[next_state[k][1]][0]  = error_total[k][2] +  (er[++f] = ((output[k][1] ^ decode_pairs[i])   - (output[k][1] ^ decode_pairs[i]) / 2)); 
+            f = 1;
+            state_his[next_state[k][0]][i] = k;
+            state_his[next_state[k][1]][i] = k;
+         } 
          for(k = 0; k < 4; k++){
            error_total[k][2] = error_total[k][0];
          }
-
-          printf("error total of 0: %d \n", error_total[0][2]);
-          printf("error total of 1: %d \n", error_total[1][2]);
-          printf("error total of 2: %d \n", error_total[2][2]);
-          printf("error total of 3: %d \n", error_total[3][2]);
-
-          for(k = 0; k < 4; k++){
-               printf("State his of %d index %d is %d\n", k, i, state_his[k][i]);
-          }
                  
-      }
+      }//end else if 
       //When we're at the flush bits, we have only errors from inputs of 0.
       else if (i >= size - 2){
-          printf("At number %d\n", i);
       
       //At the last flush bit only two states will create output.
-      if ( i == size - 1){
-
-         for ( k = 0; k < 2; k ++){
-            error_total[next_state[k][0]][k%2]  = error_total[k][2] +  (er[k] = ((output[k][0] ^ decode_pairs[i]) - (output[k][0] ^ decode_pairs[i]) / 2));
+         if ( i == size - 1){
+ 
+            for ( k = 0; k < 2; k ++){      //was k%2
+               error_total[next_state[k][0]][k]  = error_total[k][2] +  (er[k] = ((output[k][0] ^ decode_pairs[i]) - (output[k][0] ^ decode_pairs[i]) / 2));
          
-         }
+            }
          
-         //The final value is limited to two previous states.
-         if(error_total[0][0] <= error_total[0][1]){
-            state_his[0][i] = 0;
+            //The final value is limited to two previous states.
+            if(error_total[0][0] <= error_total[0][1]){
+               state_his[0][i] = 0;
+
+            }
+            else{
+               state_his[0][i] = 1;
+            }
 
          }
+         //The flush bit before it will still work with all states.
          else{
-            state_his[0][i] = 1;
-         }
 
-      }
-      //The flush bit before it will still work with all states.
-      else{
+            for ( k = 0; k < 4; k ++){
+               error_total[next_state[k][0]][k%2]  = error_total[k][2] +  (er[k] = ((output[k][0] ^ decode_pairs[i]) - (output[k][0] ^ decode_pairs[i]) / 2));
+            }
 
-             for ( k = 0; k < 4; k ++){
-                error_total[next_state[k][0]][k%2]  = error_total[k][2] +  (er[k] = ((output[k][0] ^ decode_pairs[i]) - (output[k][0] ^ decode_pairs[i]) / 2));
-             }
+            for ( k = 0; k < 2; k++){
 
-          for ( k = 0; k < 2; k++){
-
-               printf("This is %d vs %d at state %d\n", error_total[k][0], error_total[k][1], k);
-             //As was *mentioned* earlier, state_history's value is limited to two different values depending
-             //On which aggregate error is less. The small inner "if" statements address this.
-             //Whichever error total at a current state is lower has its value stored into error_total[][2]
-             //which keeps track of its total error for the next iteration. 
-            if (error_total[k][0] <= error_total[k][1]){
+               //As was *mentioned* earlier, state_history's value is limited to two different values depending
+               //On which aggregate error is less. The small inner "if" statements address this.
+               //Whichever error total at a current state is lower has its value stored into error_total[][2]
+               //which keeps track of its total error for the next iteration. 
+               if (error_total[k][0] <= error_total[k][1]){
                           
                   error_total[k][2] = error_total[k][0];
 
-               if(k == 0){
-                  state_his[k][i] = 0;
-               }
-               else if (k == 1){
-                  state_his[k][i] = 2;
-               }
+                  if(k == 0){
+                     state_his[k][i] = 0;
+                  }
+                  else if (k == 1){
+                     state_his[k][i] = 2;
+                  }
 
-             }//end if 
-             else {
+               }//end if 
+               else {
 
-               error_total[k][2] = error_total[k][1];
+                  error_total[k][2] = error_total[k][1];
 
-               if (k == 0){
-                  state_his[k][i] = 1;
-               }
-               else if (k == 1){
-                  state_his[k][i] = 3;
-               }
+                  if (k == 0){
+                     state_his[k][i] = 1;
+                  }
+                  else if (k == 1){
+                     state_his[k][i] = 3;
+                  }
 
-             }//end else
+               }//end else
 
-          }//end for loop
-     }//end else
-     for ( k = 0; k < 4; k ++){
-         
-         //           printf("State history of %d at %d: %d\n", k, i, state_his[k][i]);
-
-     }
-
-  }
-  else{
+            }//end for loop
+        }//end else
+   }//end else if
+   else{
 
      for (k = 0; k < 4 ; k ++){
          
@@ -502,17 +589,14 @@ void getHistory(unsigned char decode_pairs[], int size,  unsigned char next_stat
          */
          
          error_total[next_state[k][0]][k%2]  = error_total[k][2] +  (er[k] = ((output[k][0] ^ decode_pairs[i]) - (output[k][0] ^ decode_pairs[i]) / 2));
-     //    printf("%d  of input 0: %d by %d + %d\n", next_state[k][0], error_total[next_state[k][0]][k%2], error_total[k][2], er[k]); 
          
          error_total[next_state[k][1]][k%2]  =  error_total[k][2] + (er[k] = ((output[k][1] ^ decode_pairs[i])   - (output[k][1] ^ decode_pairs[i]) / 2));
         
-     //    printf("%d  of input 1: %d by %d + %d\n", next_state[k][1], error_total[next_state[k][1]][k%2], error_total[k][2], er[k]); 
 
-     }
+     }//end for loop
         //Errors from inputs of 1 are included into this. This adds different possiblities on what the previous state can be.
         for ( k = 0; k < 4; k++){
 
-           //  printf("\nThis is %d vs %d at state %d\n", error_total[k][0], error_total[k][1], k);
              if (error_total[k][0] <= error_total[k][1]){
 
                error_total[k][2] = error_total[k][0];
@@ -527,6 +611,7 @@ void getHistory(unsigned char decode_pairs[], int size,  unsigned char next_stat
 
              }
              else {
+
                   if (k == 0 || k == 2){
                      state_his[k][i] = 1;
                   }
@@ -539,14 +624,10 @@ void getHistory(unsigned char decode_pairs[], int size,  unsigned char next_stat
 
         }//end for
 
-        for ( k = 0; k < 4; k ++){
-
-           //     printf("State history of %d at %d: %d\n", k, i, state_his[k][i]);
-
-        }
-
- }
+ }//end else
  
-}
+}//end for loop
         
-}
+}//end getHistory
+
+

@@ -69,17 +69,19 @@ void convolution(char input[], unsigned char data[], unsigned dataLength);
 
 
 
-/*Uncomment out if you wish to run convolution by itself.
+
+
+//Uncomment out if you wish to run convolution by itself.
 int main(int argc, char * argv[]){
    
 
    unsigned char data[(strlen(argv[1])*2) + 1];
 
-   convolution(argv[1], data);
+   convolution(argv[1], data, ((strlen(argv[1])*2) + 1));
 
    return 0;
 }
-*/
+
 
 
 
@@ -91,6 +93,8 @@ void convolution(char input[], unsigned char data[], unsigned dataLength){
    int i = 0;
    unsigned length = 0;
    length = strlen(input);
+
+   printf("Data LENGTH: %d\n", sizeof(data));
 
 //This takes in 1 byte at a time from the text passed through input[] 
    for (i = 0; i < length; i++){
@@ -109,27 +113,21 @@ void convolution(char input[], unsigned char data[], unsigned dataLength){
    output(0,1);
    data[count] = byteReturn();
 
-   printf("Flush bits are: %x\nEncoding is: \n", data[count]);
-
+   printf("Flush bits are: %x\nEncoding is: \n\n", data[count]);
 
    for(i = 0; i < dataLength; i++){
-      printf("%2d ",i);
+      printf("Position %d is %x\n",i  ,data[i]);
 
    }
 
    printf("\n");
 
-   for(i = 0; i < dataLength; i++){
-      printf("%x ", data[i]);
-
-   }
-
-
-
-   printf("\n\n");
-
 
 }
+
+
+
+
 
 
 /*
@@ -172,7 +170,6 @@ void encode (unsigned char byte, unsigned char data[]){
 
 
 }
-
 /*
    Our convolutional encoder. 
 */
