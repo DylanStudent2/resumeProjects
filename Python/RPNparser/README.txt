@@ -35,4 +35,4 @@ a = x;
 $
 
 "> m" is taking input from the user to define m, whereas the "[ n@a ? d = d; : < B; ]" statement is 
-an if statement that does "if floor(n/a) isn't zero, d = d, else print out 
+an if statement that does "if floor(n/a) isn't zero, d = d, else print out blank space. 
